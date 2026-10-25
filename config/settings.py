@@ -2,17 +2,22 @@
 绿茵汇 · 省级中小学足球系统后端
 Django settings（开发默认 SQLite，开箱即跑；生产切 MySQL 见 DATABASES 注释）
 """
+import os
 from datetime import timedelta
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# 演示密钥：上线前务必换成环境变量注入的随机值
-SECRET_KEY = 'demo-secret-key-change-me-in-production'
+# 安全敏感项一律支持环境变量注入（生产启动脚本/云平台里设置，不设则保持开发默认值）：
+#   DJANGO_SECRET_KEY      生产必设的随机长字符串
+#   DJANGO_DEBUG           生产设 False
+#   DJANGO_ALLOWED_HOSTS   逗号分隔的对外域名/IP，如 example.com,1.2.3.4
+#   DJANGO_CORS_ORIGINS    逗号分隔的前端来源白名单，如 https://xxx.github.io
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'demo-secret-key-change-me-in-production')
 
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',') if h.strip()]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -94,6 +99,8 @@ TIME_ZONE = 'Asia/Shanghai'
 USE_TZ = False
 
 STATIC_URL = 'static/'
+# django-admin 后台静态文件（collectstatic 收集到这里，生产由 nginx 伺服）
+STATIC_ROOT = BASE_DIR / 'static_root'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
@@ -125,4 +132,12 @@ SIMPLE_JWT = {
 }
 
 # ===== CORS（前端走 vite 代理时用不到，直连时放行）=====
-CORS_ALLOW_ALL_ORIGINS = True
+# 生产设 DJANGO_CORS_ORIGINS 为前端来源白名单；不设则放行所有来源（开发方便，生产建议收紧）
+_CORS_ORIGINS = [o.strip() for o in os.environ.get('DJANGO_CORS_ORIGINS', '').split(',') if o.strip()]
+if _CORS_ORIGINS:
+    CORS_ALLOWED_ORIGINS = _CORS_ORIGINS
+else:
+    CORS_ALLOW_ALL_ORIGINS = True
+
+# django-admin 在反代后面提交表单时需要：与浏览器地址栏一致的完整来源（含端口）
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get('DJANGO_CSRF_ORIGINS', '').split(',') if o.strip()]
