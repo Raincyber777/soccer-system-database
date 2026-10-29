@@ -242,6 +242,8 @@ class BannerViewSet(PublishedOrStaffMixin, viewsets.ModelViewSet):
     queryset = Banner.objects.all()
     serializer_class = BannerSerializer
     permission_classes = [IsStaffOrReadOnly]
+    # Banner 的上架字段是 is_active（无 is_published），匿名列表过滤靠它
+    published_field = 'is_active'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -574,6 +576,11 @@ class RegistrationViewSet(viewsets.ModelViewSet):
         if result == 'reject' and not reason:
             raise ValidationError({'reason': '驳回必须填写原因'})
 
+        # 状态机校验：初审仅待初审件、终审仅待终审件，防止重复/跨级审核打乱状态
+        expected = Registration.Status.PENDING_CITY if stage == 'city' else Registration.Status.PENDING_PROVINCE
+        if registration.status != expected:
+            raise ValidationError({'status': '该报名件当前状态不允许此审核操作'})
+
         # 数据域校验：city 只能审本区域
         if stage == 'city' and request.user.role == 'city':
             if registration.city_code and registration.city_code != request.user.region_code:
@@ -598,8 +605,8 @@ class RegistrationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='first-review')
     def first_review(self, request, pk=None):
-        """市州初审：通过自动提交省级终审"""
-        if request.user.role not in ('city', 'admin'):
+        """市州初审：通过自动提交省级终审（两级审核制衡：初审仅市州管理员，省级只做终审）"""
+        if request.user.role != 'city':
             raise PermissionDenied('仅市州管理员可执行初审')
         return self._review(request, stage='city')
 
@@ -661,8 +668,11 @@ class SelectionBestViewSet(viewsets.ModelViewSet):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def publicity_players(request):
-    """运动员公示（仅 active）"""
+    """运动员公示（仅 active；系统参数 publicity_enabled 关闭时返回空）"""
+    from apps.common.models import SystemConfig
     from apps.common.pagination import EnvelopePagination
+    if not SystemConfig.objects.filter(key='publicity_enabled', value='true').exists():
+        return Response([])
     qs = Player.objects.filter(status='active', is_active=True).select_related('team')
     if name := request.query_params.get('name'):
         qs = qs.filter(name__icontains=name)
@@ -675,7 +685,10 @@ def publicity_players(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def publicity_coaches(request):
-    """教练员公示（仅 active）"""
+    """教练员公示（仅 active；系统参数 publicity_enabled 关闭时返回空）"""
+    from apps.common.models import SystemConfig
+    if not SystemConfig.objects.filter(key='publicity_enabled', value='true').exists():
+        return Response([])
     qs = Coach.objects.filter(status='active').select_related('team')
     if name := request.query_params.get('name'):
         qs = qs.filter(name__icontains=name)

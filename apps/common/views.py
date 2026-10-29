@@ -10,7 +10,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .models import DictItem, Region, School, SystemConfig
-from .permissions import IsAuthenticatedRole, IsStaffOrReadOnly
+from .permissions import IsAdminRole, IsAuthenticatedRole, IsStaffOrReadOnly
 from .serializers import DictItemSerializer, RegionSerializer, SchoolSerializer, SystemConfigSerializer
 
 # 允许上传的扩展名与大小上限
@@ -70,11 +70,11 @@ class DictItemViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 
 
 class SystemConfigViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
-    """系统参数：读需登录，改仅省级管理员"""
+    """系统参数：读写均仅省级管理员（admin）"""
 
     queryset = SystemConfig.objects.all().order_by('key')
     serializer_class = SystemConfigSerializer
-    permission_classes = [IsStaffOrReadOnly]
+    permission_classes = [IsAdminRole]
     pagination_class = None
 
 
