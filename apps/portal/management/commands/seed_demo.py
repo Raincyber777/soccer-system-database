@@ -352,8 +352,8 @@ class Command(BaseCommand):
         Referee.objects.create(match=matches['m3'], name='王强', role='linesman')
 
     def _seed_selection(self, players):
-        SelectionScore.objects.create(player=players['wanglei'], group_type='middle', technical=85, physical=90, status='passed')
-        SelectionScore.objects.create(player=players['lizeyu'], group_type='middle', technical=88, physical=82, status='passed')
+        SelectionScore.objects.create(player=players['wanglei'], group_type='middle', technical=85, physical=90, status='first_passed')
+        SelectionScore.objects.create(player=players['lizeyu'], group_type='middle', technical=88, physical=82, status='first_passed')
         SelectionScore.objects.create(player=players['zhouzihao'], group_type='middle', technical=80, physical=86)
         SelectionBest.objects.create(group_type='middle', player=players['wanglei'], total=92, status='publicized')
 
