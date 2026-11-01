@@ -7,19 +7,28 @@ ALLOWED_REGISTER_ROLES = ('school', 'athlete', 'coach')
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """用户信息（登录/ me / 用户管理通用）"""
+    """用户信息（登录/ me / 用户管理通用）；身份证只收原值、出脱敏值"""
 
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     persona = serializers.CharField(read_only=True)
+    id_card = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=18)
+    id_card_masked = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'role', 'role_display', 'persona', 'real_name',
-            'phone', 'email', 'region_code', 'region_name', 'unit_name',
-            'is_active', 'is_superuser', 'date_joined',
+            'phone', 'email', 'region_code', 'region_name', 'unit_name', 'id_card',
+            'id_card_masked', 'is_active', 'is_superuser', 'date_joined',
         ]
         read_only_fields = ['id', 'is_superuser', 'date_joined']
+
+    def get_id_card_masked(self, obj) -> str:
+        # 隐私防护（明面）：仅保留前 6 位与后 4 位，其余打码
+        s = obj.id_card or ''
+        if len(s) >= 11:
+            return f'{s[:6]}********{s[-4:]}'
+        return '****' if s else ''
 
 
 class RegisterSerializer(serializers.ModelSerializer):

@@ -79,7 +79,7 @@ def me(request):
     """GET /api/auth/me/：当前登录用户；PATCH：本人维护基础资料（仅安全字段，防越权改角色/归属）"""
     if request.method == 'GET':
         return Response(UserSerializer(request.user).data)
-    allowed = {'real_name', 'phone', 'email', 'unit_name'}
+    allowed = {'real_name', 'phone', 'email', 'unit_name', 'id_card'}
     data = {k: v for k, v in request.data.items() if k in allowed}
     serializer = UserSerializer(request.user, data=data, partial=True)
     serializer.is_valid(raise_exception=True)

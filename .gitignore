@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 环境
+venv/
+.venv/
+.env
+
+# 数据库与媒体（本地上传文件不入库）
+db.sqlite3
+media/
+
+# IDE
+.idea/
+.vscode/

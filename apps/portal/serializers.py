@@ -3,17 +3,18 @@ from rest_framework import serializers
 
 from .models import (
     Banner, BestLineup, BestLineupPlayer, Coach, GoalRecord, Highlight, LiveStream,
-    Match, MatchEvent, MatchResult, News, Partner, Penalty, Player, Policy, Referee,
+    Match, MatchEvent, MatchResult, News, Partner, Penalty, Player, PlayerMatchStat, Policy, Referee,
     Registration, RegistrationPlayer, ReviewLog, SelectionBest, SelectionScore, Team, Tournament,
 )
 
 
 class TournamentSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    level_display = serializers.CharField(source='get_level_display', read_only=True)
 
     class Meta:
         model = Tournament
-        fields = ['id', 'name', 'group_types', 'organizer', 'sign_start_at', 'sign_end_at',
+        fields = ['id', 'name', 'level', 'level_display', 'group_types', 'organizer', 'sign_start_at', 'sign_end_at',
                   'status', 'status_display', 'created_at', 'updated_at']
 
 
@@ -196,11 +197,13 @@ class LiveStreamSerializer(serializers.ModelSerializer):
 class NewsSerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(read_only=True)
     created_by_name = serializers.CharField(source='created_by.real_name', read_only=True, default='')
+    tournament_name = serializers.CharField(source='tournament.name', read_only=True, default='')
 
     class Meta:
         model = News
         fields = ['id', 'title', 'summary', 'cover', 'content', 'source', 'category',
-                  'category_display', 'is_top', 'is_published', 'published_at', 'view_count',
+                  'category_display', 'tournament', 'tournament_name', 'match',
+                  'is_top', 'is_published', 'published_at', 'view_count',
                   'created_by_name', 'created_at', 'updated_at']
 
 
@@ -309,3 +312,32 @@ class SelectionBestSerializer(serializers.ModelSerializer):
         model = SelectionBest
         fields = ['id', 'group_type', 'group_type_display', 'player', 'player_name',
                   'team_name', 'total', 'status', 'created_at']
+
+class PlayerMatchStatSerializer(serializers.ModelSerializer):
+    """球员比赛技术统计：嵌套比赛信息（对阵/比分/赛事/时间）"""
+
+    player_name = serializers.CharField(source='player.name', read_only=True)
+    team_name = serializers.CharField(source='team.name', read_only=True, default='—')
+    match_info = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PlayerMatchStat
+        fields = ['id', 'match', 'player', 'player_name', 'team', 'team_name', 'match_info',
+                  'goals', 'assists', 'yellow_cards', 'red_cards', 'fouls', 'minutes', 'remark',
+                  'created_at', 'updated_at']
+        read_only_fields = ['team']
+
+    def get_match_info(self, obj) -> dict:
+        m = obj.match
+        score = ''
+        result = getattr(m, 'result', None)
+        if result and result.is_published:
+            score = f'{result.home_score}:{result.away_score}'
+        return {
+            'time': m.match_time.strftime('%Y-%m-%d %H:%M'),
+            'tournament': m.tournament_name or (m.tournament.name if m.tournament else ''),
+            'home': m.home_team.name,
+            'away': m.away_team.name,
+            'score': score,
+            'status_display': m.get_status_display(),
+        }

@@ -20,7 +20,15 @@ class Tournament(models.Model):
         ONGOING = 'ongoing', '进行中'
         FINISHED = 'finished', '已结束'
 
+    class Level(models.TextChoices):
+        """赛事级别：决定报名审核层级（校级一审核、市州级/省级两级审核）"""
+
+        SCHOOL = 'school', '校级赛事'
+        CITY = 'city', '市州级赛事'
+        PROVINCE = 'province', '省级赛事'
+
     name = models.CharField('赛事名称', max_length=100)
+    level = models.CharField('级别', max_length=10, choices=Level.choices, default=Level.CITY, db_index=True)
     group_types = models.JSONField('设组', default=list)  # ["primary","middle",...]
     organizer = models.CharField('主办单位', max_length=100, blank=True, default='')
     sign_start_at = models.DateTimeField('报名开始', null=True, blank=True)
@@ -386,6 +394,34 @@ class Referee(models.Model):
         return f'{self.name}({self.get_role_display()})'
 
 
+class PlayerMatchStat(models.Model):
+    """球员比赛技术统计：进球/红黄牌/犯规等全量数据（个人与球队统计的数据源）"""
+
+    match = models.ForeignKey(Match, verbose_name='对阵', on_delete=models.CASCADE,
+                              related_name='player_stats')
+    player = models.ForeignKey(Player, verbose_name='球员', on_delete=models.CASCADE,
+                               related_name='match_stats')
+    team = models.ForeignKey(Team, verbose_name='所属球队', on_delete=models.SET_NULL,
+                             null=True, blank=True, related_name='player_stats')
+    goals = models.IntegerField('进球', default=0)
+    assists = models.IntegerField('助攻', default=0)
+    yellow_cards = models.IntegerField('黄牌', default=0)
+    red_cards = models.IntegerField('红牌', default=0)
+    fouls = models.IntegerField('犯规', default=0)
+    minutes = models.IntegerField('出场分钟', null=True, blank=True)
+    remark = models.CharField('备注', max_length=200, blank=True, default='')
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        db_table = 'portal_player_match_stat'
+        verbose_name = '球员比赛统计'
+        unique_together = [('match', 'player')]
+
+    def __str__(self):
+        return f'{self.player} @ {self.match}'
+
+
 class MatchEvent(models.Model):
     """图文直播条目"""
 
@@ -446,6 +482,11 @@ class News(models.Model):
     source = models.CharField('来源', max_length=100, blank=True, default='')
     category = models.CharField('类别', max_length=20, choices=Category.choices, default='news')
     cover = models.CharField('封面图', max_length=255, blank=True, default='')
+    # 赛事内容自动关联：新闻可挂赛事；赛果发布自动生成的战报同时关联赛事与对阵
+    tournament = models.ForeignKey(Tournament, verbose_name='关联赛事', on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='news')
+    match = models.ForeignKey(Match, verbose_name='关联对阵（自动战报）', on_delete=models.SET_NULL,
+                              null=True, blank=True, related_name='auto_news')
     is_top = models.BooleanField('置顶', default=False)
     is_published = models.BooleanField('已发布', default=True, db_index=True)
     published_at = models.DateTimeField('发布时间', default=timezone.now)

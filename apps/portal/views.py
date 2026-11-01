@@ -15,16 +15,17 @@ from apps.accounts.models import log_action
 from . import services
 from .models import (
     Banner, BestLineup, Coach, GoalRecord, Highlight, LiveStream, Match, MatchEvent,
-    MatchResult, News, Partner, Penalty, Player, Policy, Referee, Registration, ReviewLog,
-    SelectionBest, SelectionScore, Team, Tournament,
+    MatchResult, News, Partner, Penalty, Player, PlayerMatchStat, Policy, Referee,
+    Registration, ReviewLog, SelectionBest, SelectionScore, Team, Tournament,
 )
 from .serializers import (
     BannerSerializer, BestLineupSerializer, BestLineupWriteSerializer, CoachSerializer,
     GoalRecordSerializer, HighlightSerializer, LiveStreamSerializer, MatchEventSerializer,
     MatchResultSerializer, MatchSerializer, NewsSerializer, PartnerSerializer,
-    PenaltySerializer, PlayerSerializer, PolicySerializer, RefereeSerializer,
-    RegistrationListSerializer, RegistrationSerializer, RegistrationWriteSerializer,
-    SelectionBestSerializer, SelectionScoreSerializer, TeamSerializer, TournamentSerializer,
+    PenaltySerializer, PlayerMatchStatSerializer, PlayerSerializer, PolicySerializer,
+    RefereeSerializer, RegistrationListSerializer, RegistrationSerializer,
+    RegistrationWriteSerializer, SelectionBestSerializer, SelectionScoreSerializer,
+    TeamSerializer, TournamentSerializer,
 )
 
 
@@ -40,6 +41,8 @@ class TournamentViewSet(viewsets.ModelViewSet):
         p = self.request.query_params
         if group_type := p.get('group_type'):
             qs = qs.filter(group_types__contains=group_type)
+        if level := p.get('level'):
+            qs = qs.filter(level=level)
         if status := p.get('status'):
             qs = qs.filter(status=status)
         if name := p.get('name'):
@@ -203,6 +206,8 @@ class NewsViewSet(PublishedOrStaffMixin, viewsets.ModelViewSet):
         p = self.request.query_params
         if category := p.get('category'):
             qs = qs.filter(category=category)
+        if tournament := p.get('tournament'):
+            qs = qs.filter(tournament_id=tournament)
         if p.get('is_top') == 'true':
             qs = qs.filter(is_top=True)
         if keyword := p.get('search'):
@@ -393,7 +398,40 @@ class MatchResultViewSet(viewsets.ModelViewSet):
         if MatchResult.objects.filter(match=match).exists():
             raise ValidationError({'match': '该比赛已有赛果，不能重复发布'})
         result = serializer.save()
+        self._auto_report(result)
         log_action(self.request, f'发布了赛果 {result.match} {result.home_score}:{result.away_score}')
+
+    def _auto_report(self, result: MatchResult):
+        """赛事内容自动关联/自动发送：赛果发布即自动生成战报新闻并关联赛事与对阵（一场一次）"""
+        match = result.match
+        if News.objects.filter(match=match, category=News.Category.REPORT).exists():
+            return
+        m = match
+        score_part = f'{result.home_score}:{result.away_score}'
+        round_part = f'{m.round_name} ' if m.round_name else ''
+        title = f'{round_part}战报：{m.home_team.name} {score_part} {m.away_team.name}'.strip()
+        summary = f'{m.home_team.name} {score_part} {m.away_team.name}' + (f'（{m.round_name}）' if m.round_name else '')
+        lines = [
+            f'<p>{m.tournament_name or "本届赛事"}（{m.get_group_type_display()}）{m.round_name or ""}，'
+            f'{m.home_team.name} 与 {m.away_team.name} 的比赛已结束，最终比分 {score_part}。</p>',
+        ]
+        goals = GoalRecord.objects.filter(match=match).select_related('player', 'player__team')
+        if goals:
+            items = ''.join(
+                f'<li>{g.player.name}（{g.player.team.name if g.player.team else "—"}）'
+                f'进球 {g.goals}' + (f'／助攻 {g.assists}' if g.assists else '') + '</li>'
+                for g in goals
+            )
+            lines.append(f'<p>本场进球记录：</p><ul>{items}</ul>')
+        else:
+            lines.append('<p>本场暂无进球记录。</p>')
+        lines.append('<p>技术统计与精彩瞬间将持续更新，可在赛程赛果页查看详情。</p>')
+        News.objects.create(
+            title=title[:200], summary=summary[:500], content=''.join(lines),
+            category=News.Category.REPORT, source='系统自动生成',
+            is_published=True, tournament=m.tournament, match=match,
+            created_by=self.request.user,
+        )
 
 
 class GoalRecordViewSet(viewsets.ModelViewSet):
@@ -518,6 +556,9 @@ class RegistrationViewSet(viewsets.ModelViewSet):
             from django.utils import timezone
             if timezone.now() > tournament.sign_end_at:
                 raise ValidationError({'tournament': '已过该赛事报名截止时间'})
+        # 报名前置校验：球队需先完善球员与教练信息（各至少 1 人）方可报名
+        if team is not None and (team.players.count() < 1 or team.coaches.count() < 1):
+            raise ValidationError({'team': '球队需先完善球员与教练信息（各至少 1 人）后方可报名'})
         reg = serializer.save(created_by=user, status=Registration.Status.PENDING_CITY)
         log_action(self.request, f'提交了报名：{reg.team_name} → {tournament.name if tournament else ""}')
 
@@ -587,8 +628,13 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                 raise PermissionDenied('仅能审核本区域的报名件')
 
         if stage == 'city':
-            new_status = (Registration.Status.PENDING_PROVINCE if result == 'approve'
-                          else Registration.Status.REJECTED)
+            if result == 'approve':
+                # 校级赛事为一级审核：市州审核通过即正式通过；市州级/省级赛事提交省级终审
+                new_status = (Registration.Status.APPROVED
+                              if registration.tournament.level == Tournament.Level.SCHOOL
+                              else Registration.Status.PENDING_PROVINCE)
+            else:
+                new_status = Registration.Status.REJECTED
         else:
             new_status = Registration.Status.APPROVED if result == 'approve' else Registration.Status.REJECTED
 
@@ -598,7 +644,10 @@ class RegistrationViewSet(viewsets.ModelViewSet):
             registration=registration, stage=stage, result=result, reason=reason,
             operator=request.user,
         )
-        label = '通过初审' if stage == 'city' else '终审'
+        if stage == 'city':
+            label = '审核通过' if registration.tournament.level == Tournament.Level.SCHOOL else '通过初审'
+        else:
+            label = '终审'
         verb = '通过' if result == 'approve' else '驳回'
         log_action(request, f'{verb}了报名件（{label}）：{registration.team_name}')
         return Response(RegistrationSerializer(registration, context={'request': request}).data)
@@ -750,3 +799,115 @@ def verify_athlete(request):
         'verify_result': 'pass' if passed else 'fail',
         'verify_result_display': '核验通过' if passed else '核验不通过（注册未生效或报名未通过）',
     })
+
+# ---------- 球员比赛技术统计：全量红黄牌/犯规/进球数据 + 多主体查询 ----------
+
+class PlayerMatchStatViewSet(viewsets.ModelViewSet):
+    """球员比赛技术统计：管理端录入（红黄牌/犯规/进球/出场时间），个人/球队/区域按权限查询"""
+
+    queryset = PlayerMatchStat.objects.select_related(
+        'match', 'player', 'team', 'match__home_team', 'match__away_team', 'match__tournament',
+    )
+    serializer_class = PlayerMatchStatSerializer
+
+    def get_permissions(self):
+        # 读取类（列表/详情/个人/汇总）登录即可，数据域在 get_queryset 里按角色收窄
+        if self.action in ('list', 'retrieve', 'mine', 'summary'):
+            return [IsAuthenticatedRole()]
+        return [IsStaffRole()]
+
+    def get_queryset(self):
+        qs = super().get_queryset().order_by('-match__match_time')
+        p = self.request.query_params
+        user = self.request.user
+        # 数据域：市州看本市、球队负责人看本队、运动员/教练看本人（按实名身份证匹配）
+        if user.role == 'city':
+            qs = qs.filter(Q(match__home_team__city_code=user.region_code)
+                           | Q(match__away_team__city_code=user.region_code))
+        elif user.role == 'school':
+            qs = qs.filter(team__owner=user)
+        elif user.role in ('athlete', 'coach'):
+            qs = qs.filter(player__id_card=user.id_card) if user.id_card else qs.none()
+        if match := p.get('match'):
+            qs = qs.filter(match_id=match)
+        if player := p.get('player'):
+            qs = qs.filter(player_id=player)
+        if team := p.get('team'):
+            qs = qs.filter(team_id=team)
+        if days := p.get('days'):
+            from datetime import timedelta
+            from django.utils import timezone
+            try:
+                qs = qs.filter(match__match_time__gte=timezone.now() - timedelta(days=int(days)))
+            except ValueError:
+                pass
+        return qs
+
+    def _bind_team(self, serializer):
+        # team 冗余自球员归属，录入时自动带出，不信任前端传值
+        player = serializer.validated_data.get('player')
+        if player and player.team_id:
+            serializer.validated_data['team'] = player.team
+
+    def perform_create(self, serializer):
+        self._bind_team(serializer)
+        stat = serializer.save()
+        log_action(self.request, f'录入了比赛技术统计：{stat.player.name} @ {stat.match}')
+
+    def perform_update(self, serializer):
+        self._bind_team(serializer)
+        stat = serializer.save()
+        log_action(self.request, f'更新了比赛技术统计：{stat.player.name} @ {stat.match}')
+
+    def perform_destroy(self, instance):
+        label = f'{instance.player.name} @ {instance.match}'
+        instance.delete()
+        log_action(self.request, f'删除了比赛技术统计：{label}')
+
+    @action(detail=False, methods=['get'], url_path='mine')
+    def mine(self, request):
+        """我的参赛数据：当前账号按实名身份证匹配注册球员，逐场返回技术统计"""
+        user = request.user
+        player = Player.objects.filter(id_card=user.id_card).select_related('team').first() if user.id_card else None
+        if not player:
+            return Response({
+                'player': None, 'items': [], 'summary': self._aggregate(self.get_queryset()),
+                'hint': '请先在个人中心填写身份证号完成实名认证，认证后即可查看个人参赛数据',
+            })
+        qs = self.get_queryset().filter(player=player)
+        return Response({
+            'player': {'id': player.id, 'name': player.name,
+                       'team': player.team.name if player.team else '—'},
+            'items': PlayerMatchStatSerializer(qs, many=True).data,
+            'summary': self._aggregate(qs),
+        })
+
+    @action(detail=False, methods=['get'], url_path='summary')
+    def summary(self, request):
+        """统计汇总：?player_id= 单球员全量 / ?team_id= 球队汇总 / ?days=7|30 时间筛选"""
+        user = request.user
+        qs = self.get_queryset()
+        player_id = request.query_params.get('player_id')
+        team_id = request.query_params.get('team_id')
+        # 显式指定球员/球队时的越权防护：非省市级角色须在自身数据域内
+        if player_id and user.role not in ('city', 'admin') and not qs.filter(player_id=player_id).exists():
+            raise PermissionDenied('无权查看该球员的统计数据')
+        if team_id and user.role not in ('city', 'admin', 'school') and not qs.filter(team_id=team_id).exists():
+            raise PermissionDenied('无权查看该球队的统计数据')
+        return Response(self._aggregate(qs))
+
+    @staticmethod
+    def _aggregate(qs) -> dict:
+        from django.db.models import Count, Sum
+        row = qs.aggregate(matches=Count('id'), goals=Sum('goals'), assists=Sum('assists'),
+                           yellow=Sum('yellow_cards'), red=Sum('red_cards'), fouls=Sum('fouls'),
+                           minutes=Sum('minutes'))
+        return {
+            'matches': row['matches'] or 0,
+            'goals': row['goals'] or 0,
+            'assists': row['assists'] or 0,
+            'yellow_cards': row['yellow'] or 0,
+            'red_cards': row['red'] or 0,
+            'fouls': row['fouls'] or 0,
+            'minutes': row['minutes'] or 0,
+        }

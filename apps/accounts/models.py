@@ -22,6 +22,9 @@ class User(AbstractUser):
     role = models.CharField('角色', max_length=20, choices=Role.choices, default='personal', db_index=True)
     real_name = models.CharField('姓名/单位名', max_length=100, blank=True, default='')
     phone = models.CharField('手机号', max_length=20, blank=True, default='')
+    # 实名认证：运动员/教练员填写后与注册球员（身份证号）匹配，关联个人参赛数据；
+    # 接口只输出脱敏形式（保留前 6 位与后 4 位）
+    id_card = models.CharField('身份证号（实名认证）', max_length=18, blank=True, default='')
     region_code = models.CharField('所属市州区划代码', max_length=6, null=True, blank=True, db_index=True)
     region_name = models.CharField('所属市州名', max_length=30, blank=True, default='')
     unit_name = models.CharField('所属机构/单位', max_length=100, blank=True, default='')
