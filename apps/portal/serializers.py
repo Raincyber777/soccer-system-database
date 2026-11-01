@@ -203,7 +203,7 @@ class NewsSerializer(serializers.ModelSerializer):
         model = News
         fields = ['id', 'title', 'summary', 'cover', 'content', 'source', 'category',
                   'category_display', 'tournament', 'tournament_name', 'match',
-                  'is_top', 'is_published', 'published_at', 'view_count',
+                  'ai_generated', 'is_top', 'is_published', 'published_at', 'view_count',
                   'created_by_name', 'created_at', 'updated_at']
 
 

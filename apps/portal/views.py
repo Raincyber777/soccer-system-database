@@ -224,6 +224,94 @@ class NewsViewSet(PublishedOrStaffMixin, viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         log_action(self.request, f'删除了新闻「{instance.title}」')
+
+    @action(detail=False, methods=['post'], url_path='generate-report')
+    def generate_report(self, request):
+        """AI 比赛报告：汇总单场赛果/进球/判罚/技术统计生成报告新闻并自动关联赛事与对阵。
+        同一场比赛只生成一份，重复调用返回已有报告。当前为规则引擎版，
+        外部 AI 模型接入后替换 _compose_ai_report 的实现即可，接口形态不变。"""
+        match = Match.objects.filter(id=request.data.get('match')).select_related(
+            'home_team', 'away_team', 'tournament').first()
+        if match is None:
+            raise ValidationError({'match': '对阵不存在'})
+        existed = News.objects.filter(match=match, category=News.Category.AI_REPORT).first()
+        if existed:
+            return Response({'news': self.get_serializer(existed).data, 'existed': True})
+        result = getattr(match, 'result', None)
+        if result is None or not result.is_published:
+            raise ValidationError({'match': '该对阵尚未发布赛果，请先在赛果管理中发布后再生成报告'})
+        news = self._compose_ai_report(match, result)
+        log_action(request, f'生成了比赛报告「{news.title}」')
+        return Response({'news': self.get_serializer(news).data, 'existed': False},
+                        status=status.HTTP_201_CREATED)
+
+    def _compose_ai_report(self, match, result):
+        """规则引擎版报告：结构化汇总比赛数据拼装 HTML。
+        TODO 接入外部 AI 模型：本方法替换为模型 API 调用（输入比赛数据、输出报告文本）。"""
+        m = match
+        home, away = m.home_team, m.away_team
+        score_part = f'{result.home_score}:{result.away_score}'
+        if result.home_score > result.away_score:
+            outcome = f'，{home.name} 获胜'
+        elif result.home_score < result.away_score:
+            outcome = f'，{away.name} 获胜'
+        else:
+            outcome = '，双方战平'
+        title = f'比赛报告：{home.name} {score_part} {away.name}'
+        summary = (f'{m.tournament_name or "本届赛事"}{m.round_name or ""}复盘：'
+                   f'最终比分 {score_part}{outcome}，含进球记录、纪律情况与技术统计对比。')
+        lines = [
+            '<h3>比赛概况</h3>',
+            f'<p>{m.tournament_name or "本届赛事"}（{m.get_group_type_display()}）{m.round_name or ""}，'
+            f'{m.match_time.strftime("%Y-%m-%d %H:%M")}于 {m.venue or "—"} 举行，'
+            f'{home.name} 对阵 {away.name}，最终比分 {score_part}{outcome}。</p>',
+        ]
+        goals = GoalRecord.objects.filter(match=m).select_related('player', 'player__team')
+        if goals:
+            rows = ''.join(
+                f'<tr><td>{g.player.name}</td><td>{g.player.team.name if g.player.team else "—"}</td>'
+                f'<td>{g.goals}</td><td>{g.assists}</td>'
+                f'<td>{g.minute if g.minute is not None else "—"}</td></tr>'
+                for g in goals
+            )
+            lines.append('<h3>进球记录</h3>'
+                         '<table><thead><tr><th>球员</th><th>球队</th><th>进球</th><th>助攻</th><th>分钟</th></tr></thead>'
+                         f'<tbody>{rows}</tbody></table>')
+        else:
+            lines.append('<h3>进球记录</h3><p>本场暂无进球记录。</p>')
+        penalties = Penalty.objects.filter(match=m).select_related('player', 'player__team')
+        if penalties:
+            rows = ''.join(
+                f'<tr><td>{p.player.name}</td><td>{p.player.team.name if p.player.team else "—"}</td>'
+                f'<td>{p.get_type_display()}</td><td>{p.minute if p.minute is not None else "—"}</td>'
+                f'<td>{p.reason or "—"}</td></tr>'
+                for p in penalties
+            )
+            lines.append('<h3>纪律情况</h3>'
+                         '<table><thead><tr><th>球员</th><th>球队</th><th>类型</th><th>分钟</th><th>原因</th></tr></thead>'
+                         f'<tbody>{rows}</tbody></table>')
+        stats = PlayerMatchStat.objects.filter(match=m).select_related('player', 'team')
+        if stats:
+            def totals(team):
+                qs = stats.filter(team=team)
+                return {k: sum(getattr(s, k) or 0 for s in qs)
+                        for k in ('goals', 'assists', 'yellow_cards', 'red_cards', 'fouls')}
+            ht, at = totals(home), totals(away)
+            rows = ''.join(
+                f'<tr><th>{label}</th><td>{ht[k]}</td><td>{at[k]}</td></tr>'
+                for k, label in (('goals', '进球'), ('assists', '助攻'), ('yellow_cards', '黄牌'),
+                                 ('red_cards', '红牌'), ('fouls', '犯规'))
+            )
+            lines.append(f'<h3>技术统计对比</h3>'
+                         f'<table><thead><tr><th>指标</th><th>{home.name}</th><th>{away.name}</th></tr></thead>'
+                         f'<tbody>{rows}</tbody></table>')
+        lines.append('<p class="ai-note">本报告由系统基于比赛数据自动生成；AI 模型接入后将提供深度战术分析。</p>')
+        return News.objects.create(
+            title=title[:200], summary=summary[:500], content=''.join(lines),
+            category=News.Category.AI_REPORT, source='AI 生成',
+            ai_generated=True, is_published=True,
+            tournament=m.tournament, match=m, created_by=self.request.user,
+        )
         instance.delete()
 
 

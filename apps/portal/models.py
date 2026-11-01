@@ -475,6 +475,7 @@ class News(models.Model):
         NEWS = 'news', '赛事动态'
         REPORT = 'report', '战报'
         ANNOUNCEMENT = 'announcement', '通知公告'
+        AI_REPORT = 'ai_report', '比赛报告'
 
     title = models.CharField('标题', max_length=200)
     summary = models.CharField('摘要', max_length=500, blank=True, default='')
@@ -482,6 +483,8 @@ class News(models.Model):
     source = models.CharField('来源', max_length=100, blank=True, default='')
     category = models.CharField('类别', max_length=20, choices=Category.choices, default='news')
     cover = models.CharField('封面图', max_length=255, blank=True, default='')
+    # AI 比赛报告：generate-report 接口产出为 True（预留接入外部模型，接口形态不变）
+    ai_generated = models.BooleanField('AI 生成', default=False)
     # 赛事内容自动关联：新闻可挂赛事；赛果发布自动生成的战报同时关联赛事与对阵
     tournament = models.ForeignKey(Tournament, verbose_name='关联赛事', on_delete=models.SET_NULL,
                                    null=True, blank=True, related_name='news')
