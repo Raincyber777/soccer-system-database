@@ -271,6 +271,15 @@ class Match(models.Model):
         FINISHED = 'finished', '已结束'
         POSTPONED = 'postponed', '已延期'
 
+    class LivePhase(models.TextChoices):
+        """计分板推送的比赛阶段（展示用中文显示名）"""
+
+        FIRST_HALF = 'first_half', '上半场'
+        HALFTIME = 'halftime', '中场休息'
+        SECOND_HALF = 'second_half', '下半场'
+        OVERTIME = 'overtime', '加时赛'
+        PENALTY = 'penalty', '点球大战'
+
     tournament = models.ForeignKey(Tournament, verbose_name='赛事', on_delete=models.SET_NULL,
                                    null=True, blank=True, related_name='matches')
     tournament_name = models.CharField('赛事名称快照', max_length=100, blank=True, default='')
@@ -281,6 +290,13 @@ class Match(models.Model):
     match_time = models.DateTimeField('比赛时间')
     venue = models.CharField('场地', max_length=100, blank=True, default='')
     status = models.CharField('状态', max_length=20, choices=Status.choices, default='scheduled')
+    # 计分板对接：市州级/省级赛事启用（创建对阵时自动开启并生成密钥），校级走手动录入
+    scoreboard_enabled = models.BooleanField('计分板对接', default=False)
+    score_token = models.CharField('计分板推送密钥', max_length=32, blank=True, default='')
+    live_home_score = models.IntegerField('实时主队比分', null=True, blank=True)
+    live_away_score = models.IntegerField('实时客队比分', null=True, blank=True)
+    live_phase = models.CharField('比赛阶段', max_length=20, choices=LivePhase.choices, blank=True, default='')
+    live_pushed_at = models.DateTimeField('最近推送时间', null=True, blank=True)
     remark = models.TextField('备注', blank=True, default='')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name='录入人',
                                    on_delete=models.SET_NULL, null=True, blank=True)
@@ -298,6 +314,10 @@ class Match(models.Model):
     @property
     def group_type_display(self) -> str:
         return self.get_group_type_display()
+
+    @property
+    def live_phase_display(self) -> str:
+        return self.get_live_phase_display() if self.live_phase else ''
 
 
 class MatchResult(models.Model):

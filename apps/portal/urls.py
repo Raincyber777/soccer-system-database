@@ -35,4 +35,5 @@ urlpatterns = [
     path('portal/stats/standings/', views.stats_standings, name='stats-standings'),
     path('portal/stats/group-goals/', views.stats_group_goals, name='stats-group-goals'),
     path('portal/verify/', views.verify_athlete, name='verify'),
+    path('scoreboard/push/', views.scoreboard_push, name='scoreboard-push'),
 ]

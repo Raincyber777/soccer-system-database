@@ -1,7 +1,10 @@
 """门户与业务视图：公开读 + 管理端写 + 两级审核流"""
+import secrets
+
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import mixins, status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -445,8 +448,13 @@ class MatchViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        # 计分板对接：市州级/省级赛事的对阵自动开启并生成推送密钥，校级走手动录入
+        tournament = serializer.validated_data.get('tournament')
+        scoreboard = bool(tournament and tournament.level != Tournament.Level.SCHOOL)
         match = serializer.save(created_by=self.request.user,
-                                tournament_name=serializer.validated_data.get('tournament_name', ''))
+                                tournament_name=serializer.validated_data.get('tournament_name', ''),
+                                scoreboard_enabled=scoreboard,
+                                score_token=secrets.token_hex(16) if scoreboard else '')
         if match.tournament:
             Match.objects.filter(pk=match.pk).update(tournament_name=match.tournament.name)
         log_action(self.request, f'录入了对阵 {match}')
@@ -454,6 +462,77 @@ class MatchViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         log_action(self.request, f'删除了对阵 {instance}')
         instance.delete()
+
+    @action(detail=True, methods=['get', 'post'], url_path='scoreboard-config',
+            permission_classes=[IsStaffRole])
+    def scoreboard_config(self, request, pk=None):
+        """计分板对接配置（仅 staff）：查看推送密钥 / 开关对接 / 重置密钥。
+        密钥不随对阵列表下发，现场人员凭「推送地址 + 对阵 ID + 密钥」推送比分。"""
+        match = self.get_object()
+        if request.method == 'POST':
+            enabled = request.data.get('enabled')
+            if enabled is not None:
+                match.scoreboard_enabled = bool(enabled)
+            if request.data.get('reset_token') or (match.scoreboard_enabled and not match.score_token):
+                match.score_token = secrets.token_hex(16)
+            match.save(update_fields=['scoreboard_enabled', 'score_token', 'updated_at'])
+            log_action(request, f'更新了对阵 {match} 的计分板对接配置')
+        return Response({
+            'match': match.id,
+            'scoreboard_enabled': match.scoreboard_enabled,
+            'score_token': match.score_token,
+            'push_path': '/api/scoreboard/push/',
+        })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@authentication_classes([])
+def scoreboard_push(request):
+    """计分板比分推送（开放接口，凭对阵密钥鉴权，免登录）。
+    body: {match_id, token, home_score, away_score, phase?, status?}
+    - 每次比分/阶段变化推送一次即可，重复推送按最新覆盖（幂等）；
+    - status 传 finished 时比赛置为已结束并生成「待发布」草稿赛果，由管理员核对后发布对外。"""
+    match = Match.objects.filter(id=request.data.get('match_id')).first()
+    token = str(request.data.get('token') or '')
+    if match is None or not match.scoreboard_enabled or not token or token != match.score_token:
+        raise PermissionDenied('计分板对接未开启或密钥不正确')
+    try:
+        home_score = int(request.data.get('home_score'))
+        away_score = int(request.data.get('away_score'))
+    except (TypeError, ValueError):
+        raise ValidationError({'home_score': '比分必须为非负整数'})
+    if home_score < 0 or away_score < 0:
+        raise ValidationError({'home_score': '比分必须为非负整数'})
+    phase = str(request.data.get('phase') or '')
+    if phase and phase not in Match.LivePhase.values:
+        phase = ''
+    status_value = str(request.data.get('status') or '')
+    if status_value not in ('', 'ongoing', 'finished'):
+        status_value = ''
+    match.live_home_score = home_score
+    match.live_away_score = away_score
+    match.live_phase = phase
+    match.live_pushed_at = timezone.now()
+    if status_value == 'ongoing' and match.status in (Match.Status.SCHEDULED, Match.Status.ONGOING):
+        match.status = Match.Status.ONGOING
+    elif status_value == 'finished':
+        match.status = Match.Status.FINISHED
+        match.live_phase = ''
+        MatchResult.objects.update_or_create(
+            match=match,
+            defaults={'home_score': home_score, 'away_score': away_score, 'is_published': False},
+        )
+    match.save(update_fields=['live_home_score', 'live_away_score', 'live_phase',
+                              'live_pushed_at', 'status', 'updated_at'])
+    return Response({
+        'match_id': match.id,
+        'status': match.status,
+        'status_display': match.get_status_display(),
+        'home_score': home_score,
+        'away_score': away_score,
+        'phase': match.live_phase,
+    })
 
 
 class MatchResultViewSet(viewsets.ModelViewSet):

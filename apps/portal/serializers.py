@@ -140,7 +140,8 @@ class MatchSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     home_team_name = serializers.CharField(source='home_team.name', read_only=True)
     away_team_name = serializers.CharField(source='away_team.name', read_only=True)
-    result = MatchResultSerializer(read_only=True)
+    live_phase_display = serializers.CharField(read_only=True)
+    result = serializers.SerializerMethodField()
     created_by_name = serializers.CharField(source='created_by.real_name', read_only=True, default='')
 
     class Meta:
@@ -148,7 +149,19 @@ class MatchSerializer(serializers.ModelSerializer):
         fields = ['id', 'tournament', 'tournament_name', 'group_type', 'group_type_display',
                   'round_name', 'home_team', 'home_team_name', 'away_team', 'away_team_name',
                   'match_time', 'venue', 'status', 'status_display', 'remark', 'result',
+                  'scoreboard_enabled', 'live_home_score', 'live_away_score',
+                  'live_phase', 'live_phase_display', 'live_pushed_at',
                   'created_by_name', 'created_at', 'updated_at']
+
+    def get_result(self, obj):
+        """赛果仅对已发布件返回：待发布草稿（含计分板完赛推送）不向公开侧泄露"""
+        result = getattr(obj, 'result', None)
+        if result is None:
+            return None
+        user = self.context['request'].user
+        if user.is_authenticated and user.role in ('admin', 'city'):
+            return MatchResultSerializer(result).data
+        return MatchResultSerializer(result).data if result.is_published else None
 
 
 class GoalRecordSerializer(serializers.ModelSerializer):
