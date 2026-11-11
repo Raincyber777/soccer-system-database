@@ -2,7 +2,7 @@
 from django.contrib.auth import authenticate, get_user_model
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException, NotAuthenticated
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -77,6 +77,8 @@ def register(request):
 @api_view(['GET', 'PATCH'])
 def me(request):
     """GET /api/auth/me/：当前登录用户；PATCH：本人维护基础资料（仅安全字段，防越权改角色/归属）"""
+    if not request.user.is_authenticated:
+        raise NotAuthenticated('请先登录')
     if request.method == 'GET':
         return Response(UserSerializer(request.user).data)
     allowed = {'real_name', 'phone', 'email', 'unit_name', 'id_card'}
