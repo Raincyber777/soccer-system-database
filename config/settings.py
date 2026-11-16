@@ -98,13 +98,22 @@ LANGUAGE_CODE = 'zh-hans'
 TIME_ZONE = 'Asia/Shanghai'
 USE_TZ = False
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 # django-admin 后台静态文件（collectstatic 收集到这里，生产由 nginx 伺服）
 STATIC_ROOT = BASE_DIR / 'static_root'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ===== 生产安全强制项 =====
+# DEBUG=False（生产）时必须显式配置密钥与允许主机，杜绝演示默认值上线
+if not DEBUG:
+    from django.core.exceptions import ImproperlyConfigured
+    if SECRET_KEY == 'demo-secret-key-change-me-in-production':
+        raise ImproperlyConfigured('生产环境必须通过环境变量 DJANGO_SECRET_KEY 设置独立密钥')
+    if ALLOWED_HOSTS == ['*']:
+        raise ImproperlyConfigured('生产环境必须通过环境变量 DJANGO_ALLOWED_HOSTS 明确允许主机，不能为 *')
 
 # 自定义用户模型
 AUTH_USER_MODEL = 'accounts.User'
@@ -115,7 +124,7 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.IsAuthenticated',
     ),
     'DEFAULT_PAGINATION_CLASS': 'apps.common.pagination.EnvelopePagination',
     'PAGE_SIZE': 10,

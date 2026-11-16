@@ -1,7 +1,7 @@
 """门户与业务视图：公开读 + 管理端写 + 两级审核流"""
 import secrets
 
-from django.db.models import Q
+from django.db.models import ProtectedError, Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
@@ -66,8 +66,10 @@ class TeamViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = Team.objects.select_related('school').order_by('-created_at')
         p = self.request.query_params
-        # mine=true：仅本人球队（球队负责人管理自己球队用）
+        # mine=true：仅本人球队（球队负责人管理自己球队用）；匿名请求返回空集而不是 500
         if p.get('mine') == 'true':
+            if not self.request.user.is_authenticated:
+                return Team.objects.none()
             qs = qs.filter(owner=self.request.user)
         if group_type := p.get('group_type'):
             qs = qs.filter(group_type=group_type)
@@ -93,8 +95,12 @@ class TeamViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == 'school' and instance.owner_id != user.id:
             raise PermissionDenied('只能删除本人的球队')
+        try:
+            instance.delete()
+        except ProtectedError:
+            # 球队名下已有报名（PROTECT 保护历史报名数据）：拒绝删除并给出业务提示
+            raise ValidationError({'detail': '球队已有报名记录，无法删除；历史报名数据受保护，请先处理相关报名'})
         log_action(self.request, f'删除了球队 {instance.name}')
-        instance.delete()
 
 
 class PersonViewSetMixin:

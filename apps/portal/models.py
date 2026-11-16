@@ -191,7 +191,7 @@ class Registration(models.Model):
 
     tournament = models.ForeignKey(Tournament, verbose_name='报名赛事', on_delete=models.PROTECT,
                                    related_name='registrations')
-    team = models.ForeignKey(Team, verbose_name='球队', on_delete=models.CASCADE, related_name='registrations')
+    team = models.ForeignKey(Team, verbose_name='球队', on_delete=models.PROTECT, related_name='registrations')
     team_name = models.CharField('球队名称快照', max_length=100, blank=True, default='')
     group_type = models.CharField('组别', max_length=20, choices=GroupType.choices)
     city_code = models.CharField('报名市州', max_length=6, blank=True, default='', db_index=True)
