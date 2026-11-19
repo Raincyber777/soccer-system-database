@@ -104,7 +104,8 @@ def upload_file(request):
     saved = default_storage.save(save_path, file)
 
     return Response({
-        'url': request.build_absolute_uri(f'/media/{saved}'),
+        # 相对路径返回：绝对 URL 会因 nginx 剥端口生成 80 端口坏链（指向其他项目），同源拼接才是正确地址
+        'url': f'/media/{saved}',
         'path': f'/media/{saved}',
         'name': saved,
     })

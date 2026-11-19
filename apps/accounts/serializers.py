@@ -1,3 +1,5 @@
+import re
+
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
@@ -22,6 +24,12 @@ class UserSerializer(serializers.ModelSerializer):
             'id_card_masked', 'is_active', 'is_superuser', 'date_joined',
         ]
         read_only_fields = ['id', 'is_superuser', 'date_joined']
+
+    def validate_phone(self, value):
+        # 手机号防呆：填了就必须是 11 位、1 开头的数字（ZQ010）
+        if value and not re.match(r'^1\d{10}$', value):
+            raise serializers.ValidationError('手机号应为 1 开头的 11 位数字')
+        return value
 
     def get_id_card_masked(self, obj) -> str:
         # 隐私防护（明面）：仅保留前 6 位与后 4 位，其余打码
@@ -49,6 +57,11 @@ class RegisterSerializer(serializers.ModelSerializer):
     def validate_username(self, value):
         if User.objects.filter(username=value).exists():
             raise serializers.ValidationError('用户名已存在')
+        return value
+
+    def validate_phone(self, value):
+        if value and not re.match(r'^1\d{10}$', value):
+            raise serializers.ValidationError('手机号应为 1 开头的 11 位数字')
         return value
 
     def validate(self, attrs):

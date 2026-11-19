@@ -1,4 +1,6 @@
 """序列化器：输出字段名与前端 src/api/types.ts 严格对齐"""
+import re
+
 from rest_framework import serializers
 
 from .models import (
@@ -16,6 +18,14 @@ class TournamentSerializer(serializers.ModelSerializer):
         model = Tournament
         fields = ['id', 'name', 'level', 'level_display', 'group_types', 'organizer', 'sign_start_at', 'sign_end_at',
                   'status', 'status_display', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        # 报名窗口校验：截止必须晚于开始（PATCH 时与现有值合并判断）
+        start = attrs.get('sign_start_at') or (self.instance.sign_start_at if self.instance else None)
+        end = attrs.get('sign_end_at') or (self.instance.sign_end_at if self.instance else None)
+        if start and end and start >= end:
+            raise serializers.ValidationError({'sign_end_at': '报名截止时间必须晚于报名开始时间'})
+        return attrs
 
 
 class TeamSerializer(serializers.ModelSerializer):
@@ -339,6 +349,18 @@ class PlayerMatchStatSerializer(serializers.ModelSerializer):
                   'goals', 'assists', 'yellow_cards', 'red_cards', 'fouls', 'minutes', 'remark',
                   'created_at', 'updated_at']
         read_only_fields = ['team']
+
+    def validate(self, attrs):
+        # 防呆：上场时间上限 120 分钟（一场比赛含加时），计数类字段 0-99，负数/夸张值直接拒绝
+        minutes = attrs.get('minutes')
+        if minutes is not None and not 0 <= minutes <= 120:
+            raise serializers.ValidationError({'minutes': '上场时间应在 0-120 分钟之间'})
+        for field, label in (('goals', '进球'), ('assists', '助攻'), ('yellow_cards', '黄牌'),
+                             ('red_cards', '红牌'), ('fouls', '犯规')):
+            v = attrs.get(field)
+            if v is not None and not 0 <= v <= 99:
+                raise serializers.ValidationError({field: f'{label}数应在 0-99 之间'})
+        return attrs
 
     def get_match_info(self, obj) -> dict:
         m = obj.match

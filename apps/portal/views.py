@@ -232,6 +232,7 @@ class NewsViewSet(PublishedOrStaffMixin, viewsets.ModelViewSet):
         log_action(self.request, f'更新了新闻「{news.title}」')
 
     def perform_destroy(self, instance):
+        instance.delete()
         log_action(self.request, f'删除了新闻「{instance.title}」')
 
     @action(detail=False, methods=['post'], url_path='generate-report')
